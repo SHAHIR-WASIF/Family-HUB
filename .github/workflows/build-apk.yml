@@ -1,0 +1,110 @@
+name: Build Family Hub APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Build & Test Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+
+      - name: Prepare debug keystore
+        run: |
+          if [ -f debug.keystore.base64 ] && [ ! -f debug.keystore ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+          elif [ ! -f debug.keystore ]; then
+            keytool -genkeypair -v \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+      - name: Run unit and Robolectric tests
+        run: gradle :app:testDebugUnitTest --no-daemon
+
+      - name: Build Debug APK
+        run: gradle :app:assembleDebug --no-daemon
+
+      - name: Rename and stage Debug APK
+        run: |
+          mkdir -p dist-apk
+          cp app/build/outputs/apk/debug/*.apk dist-apk/FamilyHub-debug.apk
+          ls -lh dist-apk/
+
+      - name: Upload Debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FamilyHub-debug-apk
+          path: dist-apk/FamilyHub-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Build Signed Release APK (when release secrets are configured)
+        id: build_release
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$RELEASE_KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
+            echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > "${{ github.workspace }}/my-upload-key.jks"
+            export KEYSTORE_PATH="${{ github.workspace }}/my-upload-key.jks"
+            gradle :app:assembleRelease --no-daemon
+            cp app/build/outputs/apk/release/*.apk dist-apk/FamilyHub-release.apk
+            rm -f "${{ github.workspace }}/my-upload-key.jks"
+            echo "built_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Release signing secrets not set; skipping release APK build."
+            echo "built_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload Signed Release APK artifact
+        if: steps.build_release.outputs.built_release == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: FamilyHub-release-apk
+          path: dist-apk/FamilyHub-release.apk
+          retention-days: 90
+
+      - name: Publish GitHub Release on version tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-apk/*.apk
+          generate_release_notes: true
