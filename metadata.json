@@ -1,0 +1,6 @@
+{
+  "name": "Family Hub",
+  "description": "Offline-first Android family management app for profiles, custom fields, interactive family trees, events, photo galleries, and JSON backup & restore.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
